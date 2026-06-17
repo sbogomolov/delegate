@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.platform }} (${{ matrix.build_type }}, C++${{ matrix.std }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # delegate is a header-only, OS-agnostic template library, so coverage targets the axes that
+        # actually vary its behavior -- compiler frontend and C++ standard -- not OS/arch. Linux gcc and
+        # clang both pull libstdc++; macOS AppleClang pulls libc++, covering both standard libraries. The
+        # header's integration on reflector's exotic targets (ARM, FreeBSD) is already exercised by
+        # reflector's own CI, which compiles this header whenever it builds reflector.
+        build_type: [Debug, Release]
+        std: ['20', '23']
+        platform: [linux-gcc, linux-clang, macos-clang]
+        include:
+          - platform: linux-gcc
+            runner: ubuntu-24.04
+            cc: gcc-14
+            cxx: g++-14
+            packages: g++-14
+          - platform: linux-clang
+            runner: ubuntu-24.04
+            cc: clang-18
+            cxx: clang++-18
+            packages: clang-18
+          - platform: macos-clang
+            runner: macos-15
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake ninja-build ${{ matrix.packages }}
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Show toolchain
+        run: |
+          cmake --version
+          "${CXX}" --version
+        env:
+          CXX: ${{ matrix.cxx }}
+
+      # Debug carries ASan/UBSan (DELEGATE_SANITIZE defaults ON in Debug); Release runs unsanitized.
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -D CMAKE_BUILD_TYPE=${{ matrix.build_type }} \
+            -D CMAKE_CXX_STANDARD=${{ matrix.std }}
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

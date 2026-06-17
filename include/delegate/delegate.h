@@ -1,0 +1,143 @@
+// delegate — a small, header-only, zero-allocation, type-safe C++ delegate.
+//
+// A non-owning handle to a bound member function or a free function: one pointer to the object and one
+// to a generated call stub — no heap, no virtual dispatch. This header is self-contained and may be
+// copied into a project on its own.
+//
+// Repository: https://github.com/sbogomolov/delegate
+//
+// Copyright 2026 Sergii Bogomolov
+// SPDX-License-Identifier: Apache-2.0
+//
+// Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+// compliance with the License. You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software distributed under the License is
+// distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+// implied. See the License for the specific language governing permissions and limitations under the
+// License.
+
+#pragma once
+
+#include <cassert>
+#include <type_traits>
+#include <utility>
+
+namespace delegate {
+
+template <typename T>
+class Delegate;
+
+namespace detail {
+    template <typename T, typename R, typename... Args>
+    struct MethodHelperBase {
+        using ClassT = T;
+        using DelegateT = Delegate<R(Args...)>;
+    };
+
+    template <typename T>
+    struct MethodHelper;
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) const noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) volatile noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) const volatile noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <auto method>
+    using DelegateForMethod = MethodHelper<decltype(method)>::DelegateT;
+
+    // Satisfied when `method` can be invoked on a `T*`: T is the method's class, or derives from it. The
+    // derived case lets &Base::m bind on a Derived instance — taking &Derived::m of an inherited m yields a
+    // Base member pointer, so ClassT is Base while T is Derived. MethodStub's static_cast<T*> does the upcast.
+    template <auto method, typename T>
+    concept IsMethodOfClass = std::is_base_of_v<typename MethodHelper<decltype(method)>::ClassT, T>;
+
+    template <typename R, typename... Args>
+    struct FunctionHelperBase {
+        using DelegateT = Delegate<R(Args...)>;
+    };
+
+    template <typename T>
+    struct FunctionHelper;
+
+    template <typename R, typename... Args, bool is_noexcept>
+    struct FunctionHelper<R (*)(Args...) noexcept(is_noexcept)> : FunctionHelperBase<R, Args...> {};
+
+    template <auto function>
+    using DelegateForFunction = FunctionHelper<decltype(function)>::DelegateT;
+} // namespace delegate::detail
+
+template <typename R, typename... Args>
+class Delegate<R(Args...)>
+{
+private:
+    // Calls are forwarded into this fixed erased stub. Full forwarding cannot
+    // continue past this boundary because Args... are part of StubT; use
+    // reference-qualified delegate signatures when zero-copy behavior matters.
+    typedef R (*StubT)(void*, Args...);
+
+public:
+    template <typename T, auto method>
+        requires detail::IsMethodOfClass<method, T>
+    [[nodiscard]] static Delegate FromMethod(T* object) noexcept {
+        return Delegate{object, &MethodStub<T, method>};
+    }
+
+    template <R (*function)(Args...)>
+    [[nodiscard]] static Delegate FromStatic() noexcept {
+        return Delegate{nullptr, &FunctionStub<function>};
+    }
+
+    template <typename... CallArgs>
+        requires std::is_invocable_r_v<R, StubT, void*, CallArgs&&...>
+    R operator()(CallArgs&& ...args) const {
+        assert(stub_ != nullptr);
+        return stub_(object_, std::forward<CallArgs>(args)...);
+    }
+
+    // Default-constructed delegates are invalid: they bind nothing. operator() has no release-time
+    // guard branch (to keep hot-path calls branch-free) — a debug-only assert catches a null target,
+    // and in release the call is undefined. Guard with IsValid() when a delegate may not have a target.
+    Delegate() noexcept = default;
+
+    [[nodiscard]] bool IsValid() const noexcept { return stub_ != nullptr; }
+
+private:
+    Delegate(void* object, StubT stub) : object_{object}, stub_{stub} {}
+
+    template <typename T, auto method>
+    [[nodiscard]] static R MethodStub(void* object, Args... args) {
+        return (static_cast<T*>(object)->*method)(std::forward<Args>(args)...);
+    }
+
+    template <auto function>
+    [[nodiscard]] static R FunctionStub(void*, Args... args) {
+        return (*function)(std::forward<Args>(args)...);
+    }
+
+    void* object_ = nullptr;
+    StubT stub_ = nullptr;
+};
+
+template <auto method, typename T, typename D = detail::DelegateForMethod<method>>
+[[nodiscard]] inline auto CreateDelegate(T* object) noexcept
+{
+    return D::template FromMethod<T, method>(object);
+}
+
+template <auto function, typename D = detail::DelegateForFunction<function>>
+[[nodiscard]] inline auto CreateDelegate() noexcept
+{
+    return D::template FromStatic<function>();
+}
+
+} // namespace delegate
