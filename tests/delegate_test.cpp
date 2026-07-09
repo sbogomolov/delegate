@@ -55,6 +55,19 @@ struct DelegateForwardingTestSink {
     }
 };
 
+struct DelegateCompatTestClass {
+    int value = 20;
+
+    int Add(int x) { return value + x; }
+    int& ValueRef() { return value; }
+};
+
+// Compile-time probe for bind-site rejection: inside a concept the FromMethod constraint failure is a
+// substitution failure, so the probe evaluates to false instead of hard-erroring as a bare
+// requires-expression in a non-template context would.
+template <typename DelegateT, typename T, auto method>
+concept CanBindMethod = requires(T* object) { DelegateT::template FromMethod<T, method>(object); };
+
 struct DelegateInheritanceTestBase {
     int BaseMethod(int x) { return x + 100; }
 };
@@ -230,6 +243,41 @@ TEST(DelegateTest, AssignedAfterDefaultConstructionIsCallable) {
 
     EXPECT_TRUE(delegate.IsValid());
     EXPECT_EQ(delegate(1, 2.3f), 1);
+}
+
+TEST(DelegateTest, MethodSignatureCompatibility) {
+    DelegateCompatTestClass test;
+
+    // Argument and return values convert exactly as in a direct call.
+    auto widened =
+        Delegate<long(short)>::FromMethod<DelegateCompatTestClass, &DelegateCompatTestClass::Add>(&test);
+    EXPECT_EQ(widened(static_cast<short>(2)), 22L);
+
+    // A reference return binds directly: same object through a more-qualified reference.
+    auto ref =
+        Delegate<const int&()>::FromMethod<DelegateCompatTestClass, &DelegateCompatTestClass::ValueRef>(
+            &test);
+    EXPECT_EQ(&ref(), &test.value);
+
+    // Compatible binds satisfy the probe...
+    static_assert(CanBindMethod<Delegate<int(int)>, DelegateCompatTestClass, &DelegateCompatTestClass::Add>);
+    static_assert(
+        CanBindMethod<Delegate<long(short)>, DelegateCompatTestClass, &DelegateCompatTestClass::Add>);
+    // ...while incompatible ones are rejected at the bind site by IsCompatibleMethod:
+    // a non-const method on a const object,
+    static_assert(
+        !CanBindMethod<Delegate<int(int)>, const DelegateCompatTestClass, &DelegateCompatTestClass::Add>);
+    // a reference delegate over a by-value return (the reference would dangle),
+    static_assert(!CanBindMethod<Delegate<const int&(int)>, DelegateCompatTestClass,
+                                 &DelegateCompatTestClass::Add>);
+    // a reference delegate over a reference to a different type (would bind a temporary),
+    static_assert(!CanBindMethod<Delegate<const long&()>, DelegateCompatTestClass,
+                                 &DelegateCompatTestClass::ValueRef>);
+    // a void delegate over a value-returning method (the stub cannot discard a return),
+    static_assert(
+        !CanBindMethod<Delegate<void(int)>, DelegateCompatTestClass, &DelegateCompatTestClass::Add>);
+    // and a plain arity mismatch.
+    static_assert(!CanBindMethod<Delegate<int()>, DelegateCompatTestClass, &DelegateCompatTestClass::Add>);
 }
 
 TEST(DelegateTest, BindsInheritedMethodOnDerivedInstance) {

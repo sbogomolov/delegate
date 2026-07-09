@@ -34,6 +34,7 @@ namespace detail {
     template <typename T, typename R, typename... Args>
     struct MethodHelperBase {
         using ClassT = T;
+        using ReturnT = R;
         using DelegateT = Delegate<R(Args...)>;
     };
 
@@ -55,11 +56,28 @@ namespace detail {
     template <auto method>
     using DelegateForMethod = MethodHelper<decltype(method)>::DelegateT;
 
-    // Satisfied when `method` can be invoked on a `T*`: T is the method's class, or derives from it. The
-    // derived case lets &Base::m bind on a Derived instance — taking &Derived::m of an inherited m yields a
-    // Base member pointer, so ClassT is Base while T is Derived. MethodStub's static_cast<T*> does the upcast.
+    // Satisfied when `method`'s class is T or a base of T. The derived case lets &Base::m bind on a
+    // Derived instance — taking &Derived::m of an inherited m yields a Base member pointer, so ClassT is
+    // Base while T is Derived. MethodStub's static_cast<T*> does the upcast.
     template <auto method, typename T>
     concept IsMethodOfClass = std::is_base_of_v<typename MethodHelper<decltype(method)>::ClassT, T>;
+
+    template <auto method>
+    using MethodReturnT = MethodHelper<decltype(method)>::ReturnT;
+
+    // Satisfied when invoking `method` on a `T*` with the delegate's Args... yields R like a direct
+    // call would: arguments and the return value use normal conversions, a void R needs a void method
+    // (the stub cannot discard a return value), and a reference R must bind directly to a reference
+    // returned by the method — is_invocable_r alone would let a `const R&` delegate bind to a method
+    // returning by value, leaving the reference dangling once the stub returns.
+    template <auto method, typename T, typename R, typename... Args>
+    concept IsCompatibleMethod =
+        std::is_invocable_r_v<R, decltype(method), T*, Args...>
+        && (!std::is_void_v<R> || std::is_void_v<MethodReturnT<method>>)
+        && (!std::is_reference_v<R>
+            || (std::is_reference_v<MethodReturnT<method>>
+                && std::is_convertible_v<std::remove_reference_t<MethodReturnT<method>>*,
+                                         std::remove_reference_t<R>*>));
 
     template <typename R, typename... Args>
     struct FunctionHelperBase {
@@ -87,7 +105,8 @@ private:
 
 public:
     template <typename T, auto method>
-        requires detail::IsMethodOfClass<method, T>
+        requires detail::IsMethodOfClass<method, T> &&
+                 detail::IsCompatibleMethod<method, T, R, Args...>
     [[nodiscard]] static Delegate FromMethod(T* object) noexcept {
         // A null object or a null method constant has no callable target: return the invalid
         // delegate so IsValid() reports it, exactly as for default construction. The method check
