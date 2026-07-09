@@ -2,8 +2,8 @@
 
 A small, header-only C++ delegate: a non-owning, type-safe, zero-allocation handle to a bound member
 function or a free function. One pointer to the object, one pointer to a generated call stub — no heap,
-no `std::function`, no virtual dispatch. The target is fixed at compile time, so the call is a single
-indirect jump.
+no `std::function`. The target is baked in at compile time: a call is one indirect jump into a tiny
+generated stub that calls the target directly (bound virtual methods keep normal dynamic dispatch).
 
 Use it where you'd reach for `std::function` but the callable is a known method or free function and you
 want a fixed-size, allocation-free callback — event loops, dispatchers, observer hooks on hot paths.
@@ -33,15 +33,22 @@ on_click(10, 20);
 auto add = delegate::CreateDelegate<&Add>();
 int sum = add(2, 3);  // 5
 
-// Default-constructed delegates bind nothing; check before calling.
+// Default-constructed delegates bind nothing (binding a null object yields the same invalid
+// delegate); check before calling.
 delegate::Delegate<int(int, int)> later;
 if (later.IsValid()) later(1, 2);
 later = delegate::CreateDelegate<&Add>();  // bind later
 ```
 
 `CreateDelegate` deduces the signature from the bound target, so the `Delegate<...>` type is only spelled
-out when you store one. `const`/`volatile`/`noexcept`-qualified methods and methods inherited from a base
-class are all bindable.
+out when you store one. `const`/`volatile`/`noexcept`/`&`-qualified methods, methods on `const`/`volatile`
+objects, and methods inherited from a base class are all bindable; `&&`-qualified methods are deliberately
+rejected — a delegate always calls through an lvalue. Binding is checked at compile time: a method that
+cannot produce the delegate's call shape (wrong arity, unrelated types, a reference return that would
+dangle) fails at the bind site, not inside the stub.
+
+Delegates have pointer semantics: copying copies the binding, `const` on a delegate is shallow (a call can
+still mutate the bound object).
 
 ### A note on argument forwarding
 

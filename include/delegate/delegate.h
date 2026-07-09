@@ -1,7 +1,8 @@
 // delegate — a small, header-only, zero-allocation, type-safe C++ delegate.
 //
 // A non-owning handle to a bound member function or a free function: one pointer to the object and one
-// to a generated call stub — no heap, no virtual dispatch. This header is self-contained and may be
+// to a generated call stub that calls the target directly — no heap, no dispatch machinery of its own
+// (a bound virtual method keeps normal dynamic dispatch). This header is self-contained and may be
 // copied into a project on its own.
 //
 // Repository: https://github.com/sbogomolov/delegate
@@ -144,6 +145,7 @@ public:
         return Delegate{nullptr, &FunctionStub<function>};
     }
 
+    // Shallow const, like a pointer: calling through a const Delegate may mutate the bound object.
     template <typename... CallArgs>
         requires std::is_invocable_r_v<R, StubT, void*, CallArgs&&...>
     R operator()(CallArgs&& ...args) const {
