@@ -2,6 +2,8 @@
 
 #include <gtest/gtest.h>
 
+#include <memory>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -77,11 +79,66 @@ struct DelegateCompatTestClass {
 template <typename DelegateT, typename T, auto method>
 concept CanBindMethod = requires(T* object) { DelegateT::template FromMethod<T, method>(object); };
 
+// The design contract: a two-pointer, trivially copyable, register-passable handle. Runtime tests
+// cannot catch a third member or an accidental non-trivial special member; these pin the ABI.
+static_assert(sizeof(Delegate<int(int)>) == 2 * sizeof(void*));
+static_assert(std::is_trivially_copyable_v<Delegate<int(int)>>);
+static_assert(std::is_trivially_destructible_v<Delegate<int(int)>>);
+static_assert(std::is_nothrow_default_constructible_v<Delegate<int(int)>>);
+
+// The type-safety floor: a method never binds on an unrelated class.
+static_assert(
+    !CanBindMethod<Delegate<int(int, float)>, DelegateCompatTestClass, &DelegateTestClass::Method>);
+
 struct DelegateInheritanceTestBase {
     int BaseMethod(int x) { return x + 100; }
 };
 
 struct DelegateInheritanceTestDerived : DelegateInheritanceTestBase {};
+
+struct DelegateMultiBaseFirst {
+    int first_value = 11;
+    int FirstMethod() { return first_value; }
+};
+
+struct DelegateMultiBaseSecond {
+    int second_value = 22;
+    int SecondMethod() { return second_value; }
+};
+
+struct DelegateMultiDerived : DelegateMultiBaseFirst, DelegateMultiBaseSecond {};
+
+struct DelegateVirtualTestBase {
+    virtual ~DelegateVirtualTestBase() = default;
+    virtual int VirtualMethod() { return 30; }
+};
+
+struct DelegateVirtualTestDerived : DelegateVirtualTestBase {
+    int VirtualMethod() override { return 31; }
+};
+
+struct DelegateMoveOnlySink {
+    int last = 0;
+    void Take(std::unique_ptr<int> p) { last = *p; }
+};
+
+struct DelegateCopyCountingArg {
+    int copies = 0;
+
+    DelegateCopyCountingArg() = default;
+    DelegateCopyCountingArg(const DelegateCopyCountingArg& other) : copies(other.copies + 1) {}
+    DelegateCopyCountingArg(DelegateCopyCountingArg&&) = default;
+    DelegateCopyCountingArg& operator=(const DelegateCopyCountingArg&) = default;
+    DelegateCopyCountingArg& operator=(DelegateCopyCountingArg&&) = default;
+};
+
+struct DelegateCopyCountingSink {
+    int observed_copies = -1;
+    void Take(DelegateCopyCountingArg arg) { observed_copies = arg.copies; }
+};
+
+static int FreeFunctionAdd(int a, int b) { return a + b; }
+static int FreeFunctionMultiplyNoexcept(int a, int b) noexcept { return a * b; }
 
 TEST(DelegateTest, InstanceMethods) {
     DelegateTestClass test;
@@ -357,6 +414,73 @@ TEST(DelegateTest, BindsInheritedMethodOnDerivedInstance) {
     auto delegate = CreateDelegate<&DelegateInheritanceTestDerived::BaseMethod>(&derived);
 
     EXPECT_EQ(delegate(5), 105);
+}
+
+TEST(DelegateTest, BindsMethodOfSecondBaseOnDerivedInstance) {
+    // The second base sits at a non-zero offset inside the derived object, so a wrong this-pointer
+    // cast in MethodStub reads the first base's bytes — in-bounds, invisible to sanitizers, and
+    // undetectable by the empty-base test above. Only this value check catches it.
+    DelegateMultiDerived derived;
+
+    auto delegate = CreateDelegate<&DelegateMultiDerived::SecondMethod>(&derived);
+
+    EXPECT_EQ(delegate(), 22);
+}
+
+TEST(DelegateTest, VirtualMethodDispatchesDynamically) {
+    // The bound target is a compile-time constant, but a virtual method still resolves through the
+    // vtable at call time: binding &Base::VirtualMethod over a derived instance calls the override.
+    DelegateVirtualTestDerived derived;
+    DelegateVirtualTestBase* base = &derived;
+
+    auto delegate = CreateDelegate<&DelegateVirtualTestBase::VirtualMethod>(base);
+
+    EXPECT_EQ(delegate(), 31);
+}
+
+TEST(DelegateTest, FreeFunctions) {
+    // The README's headline case: genuine namespace-scope free functions, not static member functions.
+    auto add = CreateDelegate<&FreeFunctionAdd>();
+    EXPECT_EQ(add(2, 3), 5);
+
+    auto multiply = CreateDelegate<&FreeFunctionMultiplyNoexcept>();
+    EXPECT_EQ(multiply(2, 3), 6);
+}
+
+TEST(DelegateTest, PassesMoveOnlyArgumentByValue) {
+    DelegateMoveOnlySink sink;
+
+    auto delegate = CreateDelegate<&DelegateMoveOnlySink::Take>(&sink);
+    delegate(std::make_unique<int>(41));
+
+    EXPECT_EQ(sink.last, 41);
+}
+
+TEST(DelegateTest, ByValueRvalueArgumentsAreNeverCopied) {
+    // The two-hop boundary may move by-value arguments (the documented cost) but must never copy an
+    // rvalue; an lvalue pays exactly the one copy a direct call would.
+    DelegateCopyCountingSink sink;
+    auto delegate = CreateDelegate<&DelegateCopyCountingSink::Take>(&sink);
+
+    delegate(DelegateCopyCountingArg{});
+    EXPECT_EQ(sink.observed_copies, 0);
+
+    DelegateCopyCountingArg lvalue;
+    delegate(lvalue);
+    EXPECT_EQ(sink.observed_copies, 1);
+}
+
+TEST(DelegateTest, CopiesAndRebindsKeepTargets) {
+    DelegateTestClass test;
+    const auto original = CreateDelegate<&DelegateTestClass::Method>(&test);
+
+    auto copy = original;
+    EXPECT_EQ(copy(1, 2.3f), 1);
+    EXPECT_EQ(copy, original);
+
+    copy = CreateDelegate<&DelegateTestClass::MethodSameSignature>(&test);
+    EXPECT_EQ(copy(1, 2.3f), 15);
+    EXPECT_NE(copy, original);
 }
 
 }  // namespace delegate
