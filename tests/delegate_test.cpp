@@ -191,6 +191,33 @@ TEST(DelegateTest, DefaultConstructedIsInvalid) {
     EXPECT_TRUE(bound.IsValid());
 }
 
+TEST(DelegateTest, BindingNullObjectYieldsInvalidDelegate) {
+    // A method cannot be called on a null object, so binding one produces the same invalid
+    // delegate as default construction — IsValid() stays a truthful guard.
+    DelegateTestClass* null_object = nullptr;
+
+    const auto delegate = CreateDelegate<&DelegateTestClass::Method>(null_object);
+
+    EXPECT_FALSE(delegate.IsValid());
+}
+
+TEST(DelegateTest, BindingNullTargetYieldsInvalidDelegate) {
+    // Null method and function constants also bind to the invalid delegate. (These checks are
+    // runtime, not static_asserts: GCC cannot constant-evaluate the comparisons under
+    // -fsanitize=undefined.)
+    DelegateTestClass test;
+    const auto null_method =
+        Delegate<int(int, float)>::FromMethod<DelegateTestClass,
+                                              static_cast<int (DelegateTestClass::*)(int, float)>(
+                                                  nullptr)>(&test);
+
+    EXPECT_FALSE(null_method.IsValid());
+
+    const auto null_function = Delegate<int(int, float)>::FromStatic<nullptr>();
+
+    EXPECT_FALSE(null_function.IsValid());
+}
+
 TEST(DelegateTest, AssignedAfterDefaultConstructionIsCallable) {
     DelegateTestClass test;
 

@@ -89,6 +89,13 @@ public:
     template <typename T, auto method>
         requires detail::IsMethodOfClass<method, T>
     [[nodiscard]] static Delegate FromMethod(T* object) noexcept {
+        // A null object or a null method constant has no callable target: return the invalid
+        // delegate so IsValid() reports it, exactly as for default construction. The method check
+        // must stay runtime (it folds away for the normal non-null constant): GCC rejects constexpr
+        // PMF comparisons under -fsanitize=undefined, so a static_assert breaks GCC+UBSan consumers.
+        if (object == nullptr || method == nullptr) {
+            return Delegate{};
+        }
         // T carries the object's cv-qualifiers, so the const_cast is bind-side only: MethodStub's
         // static_cast<T*> restores them before the call, and a const-bound object is never accessed
         // through a non-const path.
@@ -98,6 +105,11 @@ public:
 
     template <R (*function)(Args...)>
     [[nodiscard]] static Delegate FromStatic() noexcept {
+        // Runtime for the same reason as FromMethod's null check: under -fsanitize=undefined GCC
+        // cannot constant-evaluate a null comparison against an in-class-defined (inline) function.
+        if (function == nullptr) {
+            return Delegate{};
+        }
         return Delegate{nullptr, &FunctionStub<function>};
     }
 
