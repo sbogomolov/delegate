@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(delegate
-    VERSION 0.1.0
+    VERSION 0.1.1
     DESCRIPTION "A small, zero-allocation, type-safe C++ delegate (non-owning bound callable)"
     HOMEPAGE_URL "https://github.com/sbogomolov/delegate"
     LANGUAGES CXX
