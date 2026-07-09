@@ -17,6 +17,13 @@ struct DelegateTestClass {
     int MethodVolatile() volatile { return 5; }
     int MethodConstVolatile() const volatile { return 6; }
 
+    int MethodLvalueRef() & { return 16; }
+    int MethodConstLvalueRef() const & { return 17; }
+    int MethodVolatileLvalueRef() volatile & { return 18; }
+    int MethodConstVolatileLvalueRef() const volatile & { return 19; }
+    int MethodLvalueRefNoexcept() & noexcept { return 20; }
+    int MethodRvalueRef() && { return 21; }
+
     int MethodNoexcept() noexcept { return 7; }
     int MethodConstNoexcept() const noexcept { return 8; }
     int MethodVolatileNoexcept() volatile noexcept { return 9; }
@@ -137,6 +144,30 @@ TEST(DelegateTest, NoexceptMethods) {
 
     auto delegate_cv_n = CreateDelegate<&DelegateTestClass::MethodConstVolatileNoexcept>(&test);
     EXPECT_EQ(delegate_cv_n(), 10);
+}
+
+TEST(DelegateTest, LvalueRefQualifiedMethods) {
+    DelegateTestClass test;
+
+    auto delegate_l = CreateDelegate<&DelegateTestClass::MethodLvalueRef>(&test);
+    EXPECT_EQ(delegate_l(), 16);
+
+    auto delegate_cl = CreateDelegate<&DelegateTestClass::MethodConstLvalueRef>(&test);
+    EXPECT_EQ(delegate_cl(), 17);
+
+    auto delegate_vl = CreateDelegate<&DelegateTestClass::MethodVolatileLvalueRef>(&test);
+    EXPECT_EQ(delegate_vl(), 18);
+
+    auto delegate_cvl = CreateDelegate<&DelegateTestClass::MethodConstVolatileLvalueRef>(&test);
+    EXPECT_EQ(delegate_cvl(), 19);
+
+    auto delegate_l_n = CreateDelegate<&DelegateTestClass::MethodLvalueRefNoexcept>(&test);
+    EXPECT_EQ(delegate_l_n(), 20);
+
+    // &&-qualified methods stay unbindable: the delegate always calls through an lvalue object, so
+    // consume-once methods would double-move on a second call (std::function and C++26 function_ref
+    // reject them too).
+    static_assert(!CanBindMethod<Delegate<int()>, DelegateTestClass, &DelegateTestClass::MethodRvalueRef>);
 }
 
 TEST(DelegateTest, StaticMethods) {

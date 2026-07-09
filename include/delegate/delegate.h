@@ -53,6 +53,18 @@ namespace detail {
     template <typename T, typename R, typename... Args, bool is_noexcept>
     struct MethodHelper<R (T::*)(Args...) const volatile noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
 
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) & noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) const & noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) volatile & noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
+    template <typename T, typename R, typename... Args, bool is_noexcept>
+    struct MethodHelper<R (T::*)(Args...) const volatile & noexcept(is_noexcept)> : MethodHelperBase<T, R, Args...> {};
+
     template <auto method>
     using DelegateForMethod = MethodHelper<decltype(method)>::DelegateT;
 
