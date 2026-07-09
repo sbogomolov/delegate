@@ -3,11 +3,13 @@
 #include <gtest/gtest.h>
 
 #include <utility>
+#include <vector>
 
 namespace delegate {
 
 struct DelegateTestClass {
     int Method(int, float) { return 1; }
+    int MethodSameSignature(int, float) { return 15; }
     void MethodNoReturn(int& ret, float) { ret = 2; }
     int MethodNoArgs() { return 3; }
 
@@ -243,6 +245,42 @@ TEST(DelegateTest, AssignedAfterDefaultConstructionIsCallable) {
 
     EXPECT_TRUE(delegate.IsValid());
     EXPECT_EQ(delegate(1, 2.3f), 1);
+}
+
+TEST(DelegateTest, EqualityComparesBoundTarget) {
+    DelegateTestClass test;
+    DelegateTestClass other;
+
+    const auto bound = CreateDelegate<&DelegateTestClass::Method>(&test);
+
+    // Same object, same method: equal.
+    EXPECT_EQ(bound, CreateDelegate<&DelegateTestClass::Method>(&test));
+    // Different object: unequal.
+    EXPECT_NE(bound, CreateDelegate<&DelegateTestClass::Method>(&other));
+    // Same object, different method of the same signature: unequal.
+    EXPECT_NE(bound, CreateDelegate<&DelegateTestClass::MethodSameSignature>(&test));
+    // Bound vs invalid, and invalid vs invalid.
+    EXPECT_NE(bound, (Delegate<int(int, float)>{}));
+    EXPECT_EQ((Delegate<int(int, float)>{}), (Delegate<int(int, float)>{}));
+    // Function delegates compare by bound function.
+    EXPECT_EQ(CreateDelegate<&DelegateTestClass::StaticMethod>(),
+              CreateDelegate<&DelegateTestClass::StaticMethod>());
+    EXPECT_NE(CreateDelegate<&DelegateTestClass::StaticMethod>(), bound);
+}
+
+TEST(DelegateTest, EqualityEnablesEraseByValue) {
+    // The observer-pattern round-trip: register delegates, later remove the one you registered.
+    DelegateTestClass subscriber_a;
+    DelegateTestClass subscriber_b;
+    std::vector<Delegate<int(int, float)>> subscribers{
+        CreateDelegate<&DelegateTestClass::Method>(&subscriber_a),
+        CreateDelegate<&DelegateTestClass::Method>(&subscriber_b),
+    };
+
+    std::erase(subscribers, CreateDelegate<&DelegateTestClass::Method>(&subscriber_a));
+
+    ASSERT_EQ(subscribers.size(), 1u);
+    EXPECT_EQ(subscribers.front(), CreateDelegate<&DelegateTestClass::Method>(&subscriber_b));
 }
 
 TEST(DelegateTest, MethodSignatureCompatibility) {

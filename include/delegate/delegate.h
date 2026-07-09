@@ -146,6 +146,8 @@ public:
 
     [[nodiscard]] bool IsValid() const noexcept { return stub_ != nullptr; }
 
+    [[nodiscard]] friend bool operator==(const Delegate&, const Delegate&) noexcept = default;
+
 private:
     Delegate(void* object, StubT stub) : object_{object}, stub_{stub} {}
 
