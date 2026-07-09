@@ -89,6 +89,25 @@ TEST(DelegateTest, ConstVolatileMethods) {
     EXPECT_EQ(delegate_cv(), 6);
 }
 
+TEST(DelegateTest, ConstVolatileObjects) {
+    // Qualified methods must bind through pointers to equally qualified objects — the delegate
+    // erases the qualifier at bind time and MethodStub restores it before the call.
+    const DelegateTestClass const_test{};
+    auto delegate_c = CreateDelegate<&DelegateTestClass::MethodConst>(&const_test);
+    EXPECT_EQ(delegate_c(), 4);
+
+    volatile DelegateTestClass volatile_test{};
+    auto delegate_v = CreateDelegate<&DelegateTestClass::MethodVolatile>(&volatile_test);
+    EXPECT_EQ(delegate_v(), 5);
+
+    const volatile DelegateTestClass cv_test{};
+    auto delegate_cv = CreateDelegate<&DelegateTestClass::MethodConstVolatile>(&cv_test);
+    EXPECT_EQ(delegate_cv(), 6);
+
+    auto delegate_c_n = CreateDelegate<&DelegateTestClass::MethodConstNoexcept>(&const_test);
+    EXPECT_EQ(delegate_c_n(), 8);
+}
+
 TEST(DelegateTest, NoexceptMethods) {
     DelegateTestClass test;
 

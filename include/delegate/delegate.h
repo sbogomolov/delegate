@@ -89,7 +89,11 @@ public:
     template <typename T, auto method>
         requires detail::IsMethodOfClass<method, T>
     [[nodiscard]] static Delegate FromMethod(T* object) noexcept {
-        return Delegate{object, &MethodStub<T, method>};
+        // T carries the object's cv-qualifiers, so the const_cast is bind-side only: MethodStub's
+        // static_cast<T*> restores them before the call, and a const-bound object is never accessed
+        // through a non-const path.
+        return Delegate{const_cast<void*>(static_cast<const volatile void*>(object)),
+                        &MethodStub<T, method>};
     }
 
     template <R (*function)(Args...)>
