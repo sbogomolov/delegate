@@ -165,10 +165,20 @@ public:
 private:
     Delegate(void* object, StubT stub) : object_{object}, stub_{stub} {}
 
+    // GCC's -Wstrict-aliasing heuristic misfires on the void* -> T* -> second-base upcast at -O2+
+    // (x86-64: all of GCC 13-16 warn; arm64 GCC does not) — the void* always holds a T*, so the
+    // round-trip is well-defined.
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-aliasing"
+#endif
     template <typename T, auto method>
     [[nodiscard]] static R MethodStub(void* object, Args... args) {
         return (static_cast<T*>(object)->*method)(std::forward<Args>(args)...);
     }
+#if defined(__GNUC__) && !defined(__clang__)
+#pragma GCC diagnostic pop
+#endif
 
     template <auto function>
     [[nodiscard]] static R FunctionStub(void*, Args... args) {
